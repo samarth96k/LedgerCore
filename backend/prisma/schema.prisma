@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =======================
+// ENUMS
+// =======================
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum AccountType {
+  USER_WALLET
+  SUSPENSE
+}
+
+enum AccountStatus {
+  ACTIVE
+  FROZEN
+}
+
+enum TransactionType {
+  TRANSFER
+  DEPOSIT
+  WITHDRAWAL
+  REVERSAL
+}
+
+enum TransactionStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  REVERSED
+}
+
+enum LockingStrategy {
+  OPTIMISTIC
+  PESSIMISTIC
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+enum TransactionEventType {
+  STARTED
+  VALIDATED
+  LOCK_ACQUIRED
+  COMMITTED
+  COMPLETED
+  FAILED
+  RETRIED
+}
+
+enum IdempotencyStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+}
+
+enum OutboxEventType {
+  TRANSACTION_COMPLETED
+  TRANSACTION_FAILED
+}
+
+// =======================
+// USER
+// =======================
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         UserRole @default(USER)
+
+  createdAt DateTime @default(now())
+
+  accounts     Account[]
+  transactions Transaction[]
+
+  @@map("users")
+}
+
+// =======================
+// ACCOUNT
+// =======================
+
+model Account {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id])
+
+  type     AccountType
+  currency String        @default("INR")
+  version  Int           @default(0)
+  status   AccountStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+
+  ledgerEntries LedgerEntry[]
+  balance       AccountBalance?
+
+  @@map("accounts")
+}
+
+// =======================
+// TRANSACTION
+// =======================
+
+model Transaction {
+  id String @id @default(uuid()) @db.Uuid
+
+  type   TransactionType
+  status TransactionStatus @default(PENDING)
+
+  initiatorUserId String @db.Uuid
+  initiator       User   @relation(fields: [initiatorUserId], references: [id])
+
+  amount Decimal @db.Decimal(18, 2)
+
+  currency String @default("INR")
+
+  lockingStrategy LockingStrategy
+
+  idempotencyKey String @unique
+
+  reversalOfId String? @db.Uuid
+
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ledgerEntries LedgerEntry[]
+  events        TransactionEvent[]
+
+  @@map("transactions")
+}
+
+// =======================
+// LEDGER ENTRY
+// =======================
+
+model LedgerEntry {
+  id String @id @default(uuid()) @db.Uuid
+
+  transactionId String      @db.Uuid
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+
+  accountId String  @db.Uuid
+  account   Account @relation(fields: [accountId], references: [id])
+
+  direction LedgerDirection
+
+  amount Decimal @db.Decimal(18, 2)
+
+  balanceAfter Decimal @db.Decimal(18, 2)
+
+  createdAt DateTime @default(now())
+
+  @@map("ledger_entries")
+}
+
+// =======================
+// TRANSACTION EVENTS
+// =======================
+
+model TransactionEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  transactionId String      @db.Uuid
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+
+  event TransactionEventType
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@map("transaction_events")
+}
+
+// =======================
+// IDEMPOTENCY KEYS
+// =======================
+
+model IdempotencyKey {
+  key String @id
+
+  requestHash String
+
+  responseBody Json?
+
+  status IdempotencyStatus
+
+  createdAt DateTime @default(now())
+
+  expiresAt DateTime
+
+  @@map("idempotency_keys")
+}
+
+// =======================
+// RECONCILIATION RUNS
+// =======================
+
+model ReconciliationRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  startedAt DateTime
+
+  completedAt DateTime?
+
+  accountsChecked Int
+
+  driftFound Boolean
+
+  driftDetails Json?
+
+  dryRun Boolean
+
+  @@map("reconciliation_runs")
+}
+
+// =======================
+// OUTBOX EVENTS
+// =======================
+
+model OutboxEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  eventType OutboxEventType
+
+  payload Json
+
+  status OutboxStatus
+
+  createdAt DateTime @default(now())
+
+  publishedAt DateTime?
+
+  @@map("outbox_events")
+}
+
+// =======================
+// ACCOUNT BALANCE
+// =======================
+
+model AccountBalance {
+  accountId String @id @db.Uuid
+
+  account Account @relation(fields: [accountId], references: [id])
+
+  cachedBalance Decimal @db.Decimal(18, 2)
+
+  lastLedgerEntryId String? @db.Uuid
+
+  updatedAt DateTime @updatedAt
+
+  @@map("account_balances")
+}
