@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-
+import type { JwtUserPayload } from "../../modules/users/auth.types.js";
 export function authUser(req: Request, res: Response, next: NextFunction) {
   const { token } = req.headers;
   if (!token) {
@@ -16,7 +16,9 @@ export function authUser(req: Request, res: Response, next: NextFunction) {
         message: "Invalid token",
       });
     }
-    const token_decode = jwt.verify(token, process.env.JWT_SECRET!);
+    const token_decode = jwt.verify(token, process.env.JWT_SECRET!) as JwtUserPayload;
+    req.user = token_decode;
+    next();
   } catch (error) {
     return res.status(500).json({
       success: false,
