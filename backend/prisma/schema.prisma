@@ -18,12 +18,24 @@ enum UserRole {
 
 enum AccountType {
   USER_WALLET
+  SYSTEM
+}
+
+enum SystemAccountType {
+  TREASURY
+  UPI_CLEARING
+  BANK_CLEARING
+  ATM_CLEARING
+  ADMIN_INITIATED
+  REFUND_ACCOUNT
+  FEE_REVENUE
   SUSPENSE
 }
 
 enum AccountStatus {
   ACTIVE
   FROZEN
+  CLOSE
 }
 
 enum TransactionType {
@@ -105,15 +117,22 @@ model Account {
   userId String? @db.Uuid
   user   User?   @relation(fields: [userId], references: [id])
 
-  type     AccountType
-  currency String        @default("INR")
-  version  Int           @default(0)
-  status   AccountStatus @default(ACTIVE)
+  type AccountType
+  aadhaarNumber String? @unique
+
+  systemType SystemAccountType?
+
+  currency String @default("INR")
+
+  version Int @default(0)
+
+  status AccountStatus @default(ACTIVE)
 
   createdAt DateTime @default(now())
 
   ledgerEntries LedgerEntry[]
-  balance       AccountBalance?
+
+  balance AccountBalance?
 
   @@map("accounts")
 }
@@ -266,8 +285,7 @@ model AccountBalance {
 
   account Account @relation(fields: [accountId], references: [id])
 
-  cachedBalance Decimal @db.Decimal(18, 2)
-
+  cachedBalance BigInt @default(0)
   lastLedgerEntryId String? @db.Uuid
 
   updatedAt DateTime @updatedAt

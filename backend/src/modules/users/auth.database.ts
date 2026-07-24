@@ -1,5 +1,4 @@
 import { prisma } from "../../PrismaClient/prismaclient.js";
-import bcrypt from "bcrypt";
 import type { AddUserResult } from "./auth.types.js";
 export async function findUserByEmail(email: string) {
   return prisma.user.findUnique({

@@ -18,6 +18,7 @@ export function authUser(req: Request, res: Response, next: NextFunction) {
     }
     const token_decode = jwt.verify(token, process.env.JWT_SECRET!) as JwtUserPayload;
     req.user = token_decode;
+    console.log(token_decode);
     next();
   } catch (error) {
     return res.status(500).json({
@@ -25,4 +26,18 @@ export function authUser(req: Request, res: Response, next: NextFunction) {
       message: error instanceof Error ? error.message : "Unknown error",
     });
   }
+}
+
+export function requireAdmin(
+    req: Request,
+    res: Response,
+    next: NextFunction
+) {
+    if (req.user.role !== "ADMIN") {
+        return res.status(403).json({
+            success: false,
+            message: "Access denied. Admin privileges required.",
+        });
+    }
+    next();
 }
