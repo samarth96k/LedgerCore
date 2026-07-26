@@ -66,40 +66,32 @@ export async function getLatestLedgerEntry(accountId: string) {
 export async function loadAndLockAccounts(
   tx: Prisma.TransactionClient,
   accountIds: string[],
-): Promise<LockedAccount[]> {
+) {
   const uniqueSortedIds = [...new Set(accountIds)].sort();
 
-  const accounts = await tx.$queryRaw<
-    {
-      accountId: string;
-      status: string;
-      currency: string;
-      version: number;
-      cachedBalance: bigint;
-      lastLedgerEntryId: string | null;
-      updatedAt: Date;
-    }[]
+  return tx.$queryRaw<
+    LockedAccount[]
   >`
     SELECT
       a.id AS "accountId",
       a.status,
       a.currency,
       a.version,
-      ab.cached_balance AS "cachedBalance",
-      ab.last_ledger_entry_id AS "lastLedgerEntryId",
-      ab.updated_at AS "updatedAt"
+
+      ab."cachedBalance" AS "cachedBalance",
+      ab."lastLedgerEntryId" AS "lastLedgerEntryId",
+      ab."updatedAt" AS "updatedAt"
+
     FROM accounts a
     INNER JOIN account_balances ab
-      ON a.id = ab.account_id
+      ON a.id = ab."accountId"
+
     WHERE a.id = ANY(${uniqueSortedIds}::uuid[])
+
     ORDER BY a.id
+
     FOR UPDATE
   `;
-
-  return accounts.map((account) => ({
-    ...account,
-    status: account.status as AccountStatus,
-  }));
 }
 
 export async function updateAccountBalances(

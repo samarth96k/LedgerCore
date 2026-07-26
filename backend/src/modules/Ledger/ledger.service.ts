@@ -40,6 +40,7 @@ function validateJournal(request: PostJournalRequest): void {
     if (entry.amount <= 0n) {
       throw new Error("Ledger amounts must be greater than zero.");
     }
+    
 
     if (entry.entryType === EntryType.DEBIT) {
       totalDebit += entry.amount;
@@ -122,6 +123,7 @@ function validateBalances(
     }
   }
 }
+
 export async function postJournal(request: PostJournalRequest) {
   validateJournal(request);
 
@@ -212,7 +214,6 @@ function prepareLedgerEntries(
     updatedBalances,
   };
 }
-
 
 
 

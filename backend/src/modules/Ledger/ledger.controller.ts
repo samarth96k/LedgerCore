@@ -5,7 +5,7 @@ import {
   getLedgerEntriesByAccountId,
   getLatestLedgerEntry,
 } from "./ledger.database.js";
-
+import { serializeBigInt } from "../../common/config/serialiseBigInt.js";
 import { logger } from "../../common/config/logger.js";
 
 export const getLedgerEntriesByTransactionIdController = async (
@@ -22,7 +22,7 @@ export const getLedgerEntriesByTransactionIdController = async (
 
     return res.status(200).json({
       success: true,
-      entries,
+      entries:serializeBigInt(entries),
     });
   } catch (error) {
     logger.error(error);
@@ -51,7 +51,7 @@ export const getLedgerEntriesByAccountIdController = async (
 
     return res.status(200).json({
       success: true,
-      entries,
+      entries:serializeBigInt(entries),
     });
   } catch (error) {
     logger.error(error);
@@ -85,7 +85,7 @@ export const getLatestLedgerEntryController = async (
 
     return res.status(200).json({
       success: true,
-      entry,
+      entry:serializeBigInt (entry),
     });
   } catch (error) {
     logger.error(error);
