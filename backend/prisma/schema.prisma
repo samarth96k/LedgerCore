@@ -58,19 +58,17 @@ enum LockingStrategy {
   PESSIMISTIC
 }
 
-enum LedgerDirection {
+enum EntryType {
   DEBIT
   CREDIT
 }
 
 enum TransactionEventType {
-  STARTED
-  VALIDATED
+  PAYMENT_INITIATED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+  PAYMENT_REVERSED
   LOCK_ACQUIRED
-  COMMITTED
-  COMPLETED
-  FAILED
-  RETRIED
 }
 
 enum IdempotencyStatus {
@@ -140,24 +138,21 @@ model Account {
 // =======================
 // TRANSACTION
 // =======================
-
 model Transaction {
   id String @id @default(uuid()) @db.Uuid
 
-  type   TransactionType
-  status TransactionStatus @default(PENDING)
+  type TransactionType
+  status TransactionStatus
 
   initiatorUserId String @db.Uuid
-  initiator       User   @relation(fields: [initiatorUserId], references: [id])
+  initiator User @relation(fields: [initiatorUserId], references: [id])
 
-  amount Decimal @db.Decimal(18, 2)
+  amount BigInt
 
   currency String @default("INR")
 
-  lockingStrategy LockingStrategy
-
   idempotencyKey String @unique
-
+  lockingStrategy LockingStrategy
   reversalOfId String? @db.Uuid
 
   failureReason String?
@@ -166,7 +161,7 @@ model Transaction {
   updatedAt DateTime @updatedAt
 
   ledgerEntries LedgerEntry[]
-  events        TransactionEvent[]
+  events TransactionEvent[]
 
   @@map("transactions")
 }
@@ -184,11 +179,11 @@ model LedgerEntry {
   accountId String  @db.Uuid
   account   Account @relation(fields: [accountId], references: [id])
 
-  direction LedgerDirection
+  direction EntryType
 
-  amount Decimal @db.Decimal(18, 2)
+amount BigInt
 
-  balanceAfter Decimal @db.Decimal(18, 2)
+balanceAfter BigInt
 
   createdAt DateTime @default(now())
 
