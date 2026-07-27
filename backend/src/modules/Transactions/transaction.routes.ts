@@ -11,6 +11,7 @@ import { prisma } from "../../PrismaClient/prismaclient.js";
 import { TransactionStatus } from "@prisma/client";
 import { requireAdmin } from "../../common/middleware/auth.middleware.js";
 import { serializeBigInt } from "../../common/config/serialiseBigInt.js";
+import { createTransaction,createTransactionEvent } from "./transaction.database.js";
 //END FOR POST TRANSACTION STUB
 
 export const transactionRouter = express.Router();
@@ -20,6 +21,8 @@ transactionRouter.get("/status/:status",requireAdmin,getTransactionsByStatusCont
 transactionRouter.get("/user/:userId",requireAdmin,getTransactionsByUserIdController,);   //TESTED
 transactionRouter.get("/:transactionId/events",requireAdmin,getTransactionEventsController,); //TESTED 
 transactionRouter.get("/:transactionId",requireAdmin,getTransactionByIdController,); //TESTED
+
+//----------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 //REMOVE THE ROUTEE AFTER PAYMENT MODULE IS IMPLEMENTED AS IT IS JUST A STUB FOR IMPLEMENTATION!!!!!!
 //TESTED
@@ -34,17 +37,19 @@ transactionRouter.post("/postTransactionStub",requireAdmin ,async (req, res) => 
       lockingStrategy,
     } = req.body;
 
-    const transaction = await prisma.transaction.create({
-      data: {
-        type,
-        initiatorUserId,
-        amount: BigInt(amount),
-        currency,
-        idempotencyKey,
-        lockingStrategy,
-        status: TransactionStatus.PENDING,
-      },
+const transaction = await prisma.$transaction(
+  async (tx) => {
+    return createTransaction(tx, {
+      type,
+      initiatorUserId,
+      amount: BigInt(amount),
+      currency,
+      idempotencyKey,
+      lockingStrategy,
+      status: TransactionStatus.PENDING,
     });
+  },
+);
 
 return res.status(201).json({
   success: true,
@@ -73,16 +78,16 @@ transactionRouter.post(
       const { transactionId } = req.params;
       const { event, metadata } = req.body;
 
-      const transactionEvent =
-        await prisma.transactionEvent.create({
-          data: {
-            transactionId,
-            event,
-            ...(metadata !== undefined && {
-              metadata,
-            }),
-          },
-        });
+const transactionEvent = await prisma.$transaction(
+  async (tx) => {
+    return createTransactionEvent(
+      tx,
+      transactionId,
+      event,
+      metadata,
+    );
+  },
+);
 
       return res.status(201).json({
         success: true,

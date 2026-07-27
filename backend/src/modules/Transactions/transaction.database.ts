@@ -1,33 +1,9 @@
 import { prisma } from "../../PrismaClient/prismaclient.js";
-
 import { TransactionStatus } from "@prisma/client";
-
 import { TransactionEventType, Prisma } from "@prisma/client";
-
 import type { CreateTransactionInput } from "./transaction.types.js";
 
-export async function createTransaction({
-  type,
-  initiatorUserId,
-  amount,
-  currency = "INR",
-  idempotencyKey,
-  status = TransactionStatus.PENDING,
-  lockingStrategy,
-}: CreateTransactionInput) {
-  return prisma.transaction.create({
-    data: {
-      type,
-      initiatorUserId,
-      amount,
-      currency,
-      idempotencyKey,
-      status,
-      lockingStrategy,
-    },
-  });
-}
-
+//read functions so they do not require transaction parameter from payment module
 export async function getTransactionById(transactionId: string) {
   return prisma.transaction.findUnique({
     where: {
@@ -65,47 +41,6 @@ export async function getTransactionByIdempotencyKey(idempotencyKey: string) {
   return prisma.transaction.findUnique({
     where: {
       idempotencyKey,
-    },
-  });
-}
-
-export async function updateTransactionStatus(
-  transactionId: string,
-  status: TransactionStatus,
-  failureReason?: string,
-) {
-  return prisma.transaction.update({
-    where: {
-      id: transactionId,
-    },
-    data: {
-      status,
-      failureReason: failureReason ?? null,
-    },
-  });
-}
-
-export async function markTransactionFailed(transactionId: string) {
-  return updateTransactionStatus(transactionId, TransactionStatus.FAILED);
-}
-
-export async function markTransactionSuccessful(transactionId: string) {
-  return updateTransactionStatus(transactionId, TransactionStatus.SUCCESS);
-}
-export async function markTransactionReversed(transactionId: string) {
-  return updateTransactionStatus(transactionId, TransactionStatus.REVERSED);
-}
-
-export async function createTransactionEvent(
-  transactionId: string,
-  event: TransactionEventType,
-  metadata?: Prisma.InputJsonValue,
-) {
-  return prisma.transactionEvent.create({
-    data: {
-      transactionId,
-      event,
-      ...(metadata !== undefined && { metadata }),
     },
   });
 }
@@ -148,6 +83,102 @@ export async function getRecentTransactions(limit = 20) {
     take: limit,
     orderBy: {
       createdAt: "desc",
+    },
+  });
+}
+
+
+//write functions tx required to mantAin atomicity
+
+export async function createTransaction(
+  tx: Prisma.TransactionClient,
+  {
+    type,
+    initiatorUserId,
+    amount,
+    currency = "INR",
+    idempotencyKey,
+    status = TransactionStatus.PENDING,
+    lockingStrategy,
+  }: CreateTransactionInput,
+) {
+  return tx.transaction.create({
+    data: {
+      type,
+      initiatorUserId,
+      amount,
+      currency,
+      idempotencyKey,
+      status,
+      lockingStrategy,
+    },
+  });
+}
+
+
+
+
+export async function updateTransactionStatus(
+  tx: Prisma.TransactionClient,
+  transactionId: string,
+  status: TransactionStatus,
+  failureReason?: string,
+) {
+  return tx.transaction.update({
+    where: {
+      id: transactionId,
+    },
+    data: {
+      status,
+      failureReason: failureReason ?? null,
+    },
+  });
+}
+
+export async function markTransactionFailed(
+  tx: Prisma.TransactionClient,
+  transactionId: string,
+) {
+  return updateTransactionStatus(
+    tx,
+    transactionId,
+    TransactionStatus.FAILED,
+  );
+}
+
+export async function markTransactionSuccessful(
+  tx: Prisma.TransactionClient,
+  transactionId: string,
+) {
+  return updateTransactionStatus(
+    tx,
+    transactionId,
+    TransactionStatus.SUCCESS,
+  );
+}
+
+export async function markTransactionReversed(
+  tx: Prisma.TransactionClient,
+  transactionId: string,
+) {
+  return updateTransactionStatus(
+    tx,
+    transactionId,
+    TransactionStatus.REVERSED,
+  );
+}
+
+export async function createTransactionEvent(
+  tx:Prisma.TransactionClient,
+  transactionId: string,
+  event: TransactionEventType,
+  metadata?: Prisma.InputJsonValue,
+) {
+  return tx.transactionEvent.create({
+    data: {
+      transactionId,
+      event,
+      ...(metadata !== undefined && { metadata }),
     },
   });
 }

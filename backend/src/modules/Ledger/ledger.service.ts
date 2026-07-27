@@ -5,7 +5,6 @@ import {
   Prisma,
   AccountStatus,
 } from "@prisma/client";
-import { prisma } from "../../PrismaClient/prismaclient.js";
 import {
   loadAndLockAccounts,
   createLedgerEntries,
@@ -124,50 +123,6 @@ function validateBalances(
   }
 }
 
-export async function postJournal(request: PostJournalRequest) {
-  validateJournal(request);
-
-  return prisma.$transaction(async (tx) => {
-    const lockedAccounts = await loadLockedAccounts(tx, request);
-
-    validateBalances(lockedAccounts, request);
-
-    const preparedJournal = prepareLedgerEntries(request, lockedAccounts);
-
-    const createdEntries = await createLedgerEntries(
-      tx,
-      preparedJournal.ledgerEntries,
-    );
-
-    const updatedBalances = [...preparedJournal.updatedBalances.values()];
-
-    /*
-      Associate each account with the LAST ledger entry
-      created for that account.
-    */
-    const latestEntryMap = new Map<string, string>();
-
-    for (const entry of createdEntries) {
-      latestEntryMap.set(entry.accountId, entry.id);
-    }
-    for (const balance of updatedBalances) {
-      const ledgerEntryId = latestEntryMap.get(balance.accountId);
-
-      if (ledgerEntryId === undefined) {
-        throw new Error(
-          `Missing latest ledger entry for account ${balance.accountId}.`,
-        );
-      }
-
-      balance.lastLedgerEntryId = ledgerEntryId;
-    }
-
-    await updateAccountBalances(tx, updatedBalances);
-
-    return createdEntries;
-  });
-}
-
 function prepareLedgerEntries(
   request: PostJournalRequest,
   lockedAccounts: Map<string, LockedAccount>,
@@ -213,6 +168,62 @@ function prepareLedgerEntries(
     ledgerEntries,
     updatedBalances,
   };
+}
+
+export async function postJournal(
+  tx: Prisma.TransactionClient,
+  request: PostJournalRequest,
+) {
+  validateJournal(request);
+
+  const lockedAccounts = await loadLockedAccounts(tx, request);
+
+  validateBalances(lockedAccounts, request);
+
+  const preparedJournal = prepareLedgerEntries(
+    request,
+    lockedAccounts,
+  );
+
+  const createdEntries = await createLedgerEntries(
+    tx,
+    preparedJournal.ledgerEntries,
+  );
+
+  const updatedBalances = [
+    ...preparedJournal.updatedBalances.values(),
+  ];
+
+  /*
+    Associate each account with the LAST ledger entry
+    created for that account.
+  */
+  const latestEntryMap = new Map<string, string>();
+
+  for (const entry of createdEntries) {
+    latestEntryMap.set(entry.accountId, entry.id);
+  }
+
+  for (const balance of updatedBalances) {
+    const ledgerEntryId = latestEntryMap.get(
+      balance.accountId,
+    );
+
+    if (ledgerEntryId === undefined) {
+      throw new Error(
+        `Missing latest ledger entry for account ${balance.accountId}.`,
+      );
+    }
+
+    balance.lastLedgerEntryId = ledgerEntryId;
+  }
+
+  await updateAccountBalances(
+    tx,
+    updatedBalances,
+  );
+
+  return createdEntries;
 }
 
 

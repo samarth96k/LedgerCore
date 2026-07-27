@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "SystemAccountType" ADD VALUE 'FOREIGN_SETTLEMENT';

@@ -27,6 +27,7 @@ enum SystemAccountType {
   BANK_CLEARING
   ATM_CLEARING
   ADMIN_INITIATED
+  FOREIGN_SETTLEMENT
   REFUND_ACCOUNT
   FEE_REVENUE
   SUSPENSE
@@ -74,6 +75,7 @@ enum TransactionEventType {
 enum IdempotencyStatus {
   IN_PROGRESS
   COMPLETED
+  FAILED
 }
 
 enum OutboxStatus {

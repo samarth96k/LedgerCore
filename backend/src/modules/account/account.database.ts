@@ -1,6 +1,6 @@
 import { prisma } from "../../PrismaClient/prismaclient.js";
 
-import { AccountType, AccountStatus, SystemAccountType } from "@prisma/client";
+import { AccountType, AccountStatus, SystemAccountType,Prisma } from "@prisma/client";
 
 export async function createAccount(
   type: AccountType = AccountType.USER_WALLET,
@@ -39,28 +39,34 @@ if (type === AccountType.USER_WALLET && systemType) {
   });
 }
 
-export async function getAccountById(accountId: string) {
-  return prisma.account.findUnique({
+export async function getAccountByIdTx(
+  tx: Prisma.TransactionClient,
+  accountId: string,
+) {
+  return tx.account.findUnique({
     where: {
       id: accountId,
     },
     include: {
       balance: true,
-    user: {
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        createdAt: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          createdAt: true,
+        },
       },
     },
-  }
   });
 }
 
-export async function getAccountByUserId(userId: string) {
-  return prisma.account.findFirst({
+export async function getAccountByUserIdTx(
+  tx: Prisma.TransactionClient,
+  userId: string,
+) {
+  return tx.account.findFirst({
     where: {
       userId,
     },
@@ -105,5 +111,24 @@ export async function updateCachedBalance(
       cachedBalance,
       lastLedgerEntryId,
     },
+  });
+}
+
+
+
+//wrapper functions for public api (admin here)
+export async function getAccountByUserId(
+  userId: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    return getAccountByUserIdTx(tx, userId);
+  });
+}
+
+export async function getAccountById(
+  accountId: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    return getAccountByIdTx(tx, accountId);
   });
 }
