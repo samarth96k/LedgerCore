@@ -41,3 +41,16 @@ export interface PaymentContext {
 
     options: PaymentOptions;
 }
+
+
+import type { Transaction } from "@prisma/client";
+
+export type PaymentReservation =
+  | {
+      type: "NEW";
+      transaction: Transaction;
+    }
+  | {
+      type: "COMPLETED";
+      response: unknown;
+    };

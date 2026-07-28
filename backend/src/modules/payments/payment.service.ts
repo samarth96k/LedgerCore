@@ -1,42 +1,60 @@
-import { prisma } from "../../PrismaClient/prismaclient.js";
-import type { CreatePaymentRequest, PaymentOptions } from "./payment.types.js";
-import { validatePaymentRequest } from "./payment.validation.js";
+import crypto from "crypto";
 import {
-  Prisma,
   AccountStatus,
-  TransactionStatus,
-  TransactionEventType,
+  EntryType,
+  IdempotencyStatus,
+  Prisma,
   SystemAccountType,
+  TransactionEventType,
+  TransactionStatus,
+  type Transaction,
 } from "@prisma/client";
-import { SYSTEM_ACCOUNTS } from "../payments/systemAccounts.js";
+import { logger } from "../../common/config/logger.js";
+import { prisma } from "../../PrismaClient/prismaclient.js";
 import {
   getAccountByIdTx,
   getAccountByUserIdTx,
 } from "../account/account.database.js";
 import {
+  createIdempotencyReservationTx,
+  getIdempotencyByKeyTx,
+  reclaimIdempotencyReservationTx,
+  completeIdempotencyTx,
+  failIdempotencyTx,
+} from "../idempotency/idempotency.database.js";
+import { postJournal } from "../Ledger/ledger.service.js";
+import type { PostJournalRequest } from "../Ledger/ledger.types.js";
+import { SYSTEM_ACCOUNTS } from "../payments/systemAccounts.js";
+import {
   createTransaction,
   createTransactionEvent,
+  markTransactionSuccessful,
+  markTransactionFailed,
+  markTransactionReversed,
 } from "../Transactions/transaction.database.js";
-import type { PostJournalRequest } from "../Ledger/ledger.types.js";
-import { EntryType } from "@prisma/client";
-import { postJournal } from "../Ledger/ledger.service.js";
-import { markTransactionSuccessful } from "../Transactions/transaction.database.js";
-import {logger} from "../../common/config/logger.js";
-import type { Transaction } from "@prisma/client";
+import type {
+  CreatePaymentRequest,
+  PaymentOptions,
+  PaymentReservation,
+} from "./payment.types.js";
+import { validatePaymentRequest } from "./payment.validation.js";
 
 export async function createPayment(
   authenticatedUserId: string,
   request: CreatePaymentRequest,
   options: PaymentOptions,
 ) {
+  console.log("REQUEST =", request);
   validatePaymentRequest(request);
 
-  const reservation =
-    await reservePayment(
-      authenticatedUserId,
-      request,
-    );
+  const reservation = await reservePayment(authenticatedUserId, request);
 
+  // Handle completed retry
+  if (reservation.type === "COMPLETED") {
+    return reservation.response;
+  }
+
+  // From here onwards reservation.type === "NEW"
   try {
     return await executePayment(
       reservation.transaction,
@@ -45,52 +63,66 @@ export async function createPayment(
       options,
     );
   } catch (error) {
-  try {
-    await failPayment(
-    reservation.transaction.id,
-    error,
-);
-  } catch (finalizationError) {
-    logger.error(
-      "Failed to finalize payment failure.\n"+finalizationError,
-    );
-  }
+    try {
+      await failPayment(reservation.transaction, error);
+    } catch (finalizationError) {
+      logger.error(
+        `Failed to finalize payment failure: ${String(finalizationError)}`,
+      );
+    }
 
-  throw error;
-}
+    throw error;
+  }
 }
 
 //create payment TRANSACTION A - INITIATION
 async function reservePayment(
   authenticatedUserId: string,
   request: CreatePaymentRequest,
-) {
-  return prisma.$transaction(async (tx) => {
+): Promise<PaymentReservation> {
+  const requestHash = generateRequestHash(request);
 
-    // TODO
-    // reserveIdempotency(tx, ...)
+  const expiresAt = new Date(
+    Date.now() + 15 * 60 * 1000,
+  );
 
-    const transaction = await createTransaction(tx, {
-      type: request.transactionType,
-      initiatorUserId: authenticatedUserId,
-      amount: request.amount,
-      idempotencyKey: request.idempotencyKey,
-      lockingStrategy: request.lockingStrategy,
-      status: TransactionStatus.PENDING,
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await createIdempotencyReservationTx(
+        tx,
+        request.idempotencyKey,
+        requestHash,
+        expiresAt,
+      );
+
+      return createPendingTransaction(
+        tx,
+        authenticatedUserId,
+        request,
+      );
     });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      // Previous transaction has already been rolled back.
+      // Start a brand-new transaction to inspect the existing reservation.
+      return prisma.$transaction(async (tx) => {
+        return handleDuplicateReservation(
+          tx,
+          authenticatedUserId,
+          request,
+          requestHash,
+          expiresAt,
+        );
+      });
+    }
 
-    await createTransactionEvent(
-      tx,
-      transaction.id,
-      TransactionEventType.PAYMENT_INITIATED,
-    );
-
-    return {
-      transaction,
-      // idempotency
-    };
-  });
+    throw error;
+  }
 }
+
 //create payment TRANSACTION B - PAYMENT LOGIC AND other stuff
 async function executePayment(
   transaction: Transaction,
@@ -99,21 +131,11 @@ async function executePayment(
   options: PaymentOptions,
 ) {
   return prisma.$transaction(async (tx) => {
+    const sender = await loadSenderAccount(tx, authenticatedUserId);
 
-    const sender = await loadSenderAccount(
-      tx,
-      authenticatedUserId,
-    );
+    const recipient = await loadRecipientAccount(tx, request.toAccountId);
 
-    const recipient = await loadRecipientAccount(
-      tx,
-      request.toAccountId,
-    );
-
-    validateBusinessRules(
-      sender,
-      recipient,
-    );
+    validateBusinessRules(sender, recipient);
 
     const journal = buildJournalEntries(
       transaction.id,
@@ -122,39 +144,67 @@ async function executePayment(
       request,
       options,
     );
+console.log(journal);
+    const ledgerEntries = await postJournal(tx, journal);
 
-    const ledgerEntries = await postJournal(
-      tx,
-      journal,
-    );
-
-    await markTransactionSuccessful(
-      tx,
-      transaction.id,
-    );
+    await markTransactionSuccessful(tx, transaction.id);
 
     await createTransactionEvent(
       tx,
       transaction.id,
       TransactionEventType.PAYMENT_SUCCEEDED,
     );
-
-    // TODO
-    // completeIdempotency(tx,...)
-
-    return {
+    const response = {
       transactionId: transaction.id,
       status: TransactionStatus.SUCCESS,
-      ledgerEntries,
     };
+
+    const completed = await completeIdempotencyTx(
+      tx,
+      request.idempotencyKey,
+      response,
+    );
+
+    if (completed.count === 0) {
+      throw new Error("Failed to finalize idempotency record.");
+    }
+
+    return response;
   });
 }
-//create payment TRANSACTION C - FAILURE MODE
-async function failPayment(
-    transactionId: string,
-    error: unknown,
-){
 
+//create payment TRANSACTION C - FAILURE MODE
+async function failPayment(transaction: Transaction, error: unknown) {
+  return prisma.$transaction(async (tx) => {
+    const failureReason =
+      error instanceof Error ? error.message : "Unknown payment failure.";
+
+    const updated = await markTransactionFailed(
+      tx,
+      transaction.id,
+      failureReason,
+    );
+
+    // Somebody else already finalized it.
+    if (updated.count === 0) {
+      return;
+    }
+
+    await createTransactionEvent(
+      tx,
+      transaction.id,
+      TransactionEventType.PAYMENT_FAILED,
+    );
+
+    const failedIdempotency = await failIdempotencyTx(
+      tx,
+      transaction.idempotencyKey,
+    );
+
+    if (failedIdempotency.count === 0) {
+      return ;
+    }
+  });
 }
 
 //helpers
@@ -245,25 +295,142 @@ function buildJournalEntries(
   // Sender pays:
   // amount + platform fee + tax
   const senderDebit = request.amount + platformFee + tax;
-
+console.log({
+  requestAmount: request.amount,
+  senderDebit,
+  requestAmountType: typeof request.amount,
+  senderDebitType: typeof senderDebit,
+  platformFeeType: typeof platformFee,
+  taxType: typeof tax,
+});
   addEntry(entries, senderAccountId, EntryType.DEBIT, senderDebit);
 
   addEntry(entries, recipientAccountId, EntryType.CREDIT, request.amount);
 
   addEntry(
     entries,
-     SystemAccountType.FEE_REVENUE,
+    SystemAccountType.FEE_REVENUE,
     EntryType.CREDIT,
     platformFee,
   );
 
-  addEntry(entries,  SYSTEM_ACCOUNTS.TREASURY, EntryType.CREDIT, tax);
+  addEntry(entries, SYSTEM_ACCOUNTS.TREASURY, EntryType.CREDIT, tax);
 
   return {
     transactionId,
     lockingStrategy: request.lockingStrategy,
     entries,
   };
+}
+
+function generateRequestHash(request: CreatePaymentRequest): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        toAccountId: request.toAccountId,
+        amount: request.amount.toString(),
+        transactionType: request.transactionType,
+        lockingStrategy: request.lockingStrategy,
+      }),
+    )
+    .digest("hex");
+}
+
+async function createPendingTransaction(
+  tx: Prisma.TransactionClient,
+  authenticatedUserId: string,
+  request: CreatePaymentRequest,
+): Promise<PaymentReservation> {
+  const transaction = await createTransaction(tx, {
+    type: request.transactionType,
+    initiatorUserId: authenticatedUserId,
+    amount: request.amount,
+    idempotencyKey: request.idempotencyKey,
+    lockingStrategy: request.lockingStrategy,
+    status: TransactionStatus.PENDING,
+  });
+
+  await createTransactionEvent(
+    tx,
+    transaction.id,
+    TransactionEventType.PAYMENT_INITIATED,
+  );
+
+  return {
+    type: "NEW",
+    transaction,
+  };
+}
+
+function verifyRequestHash(storedHash: string, currentHash: string): void {
+  if (storedHash !== currentHash) {
+    throw new Error("Idempotency key reused with a different request payload.");
+  }
+}
+
+async function handleDuplicateReservation(
+  tx: Prisma.TransactionClient,
+  authenticatedUserId: string,
+  request: CreatePaymentRequest,
+  requestHash: string,
+  expiresAt: Date,
+): Promise<PaymentReservation> {
+  const existing = await getIdempotencyByKeyTx(tx, request.idempotencyKey);
+
+  if (!existing) {
+    throw new Error("Idempotency reservation disappeared.");
+  }
+
+  verifyRequestHash(existing.requestHash, requestHash);
+
+  switch (existing.status) {
+    case IdempotencyStatus.COMPLETED:
+      return {
+        type: "COMPLETED",
+        response: existing.responseBody,
+      };
+
+    case IdempotencyStatus.IN_PROGRESS: {
+      // Still being processed by another request
+      if (existing.expiresAt > new Date()) {
+        throw new Error("Payment is already being processed.");
+      }
+
+      // Expired reservation -> reclaim it
+      const reclaimed = await reclaimIdempotencyReservationTx(
+        tx,
+        request.idempotencyKey,
+        requestHash,
+        expiresAt,
+      );
+
+      if (reclaimed.count === 0) {
+        throw new Error("Failed to reclaim idempotency reservation.");
+      }
+
+      return createPendingTransaction(tx, authenticatedUserId, request);
+    }
+
+    case IdempotencyStatus.FAILED: {
+      // Previous attempt failed -> reclaim reservation
+      const reclaimed = await reclaimIdempotencyReservationTx(
+        tx,
+        request.idempotencyKey,
+        requestHash,
+        expiresAt,
+      );
+
+      if (reclaimed.count === 0) {
+        throw new Error("Failed to reclaim idempotency reservation.");
+      }
+
+      return createPendingTransaction(tx, authenticatedUserId, request);
+    }
+
+    default:
+      throw new Error("Unknown idempotency state.");
+  }
 }
 
 // export async function createPayment(

@@ -138,12 +138,18 @@ export async function updateTransactionStatus(
 export async function markTransactionFailed(
   tx: Prisma.TransactionClient,
   transactionId: string,
+  failureReason: string,
 ) {
-  return updateTransactionStatus(
-    tx,
-    transactionId,
-    TransactionStatus.FAILED,
-  );
+  return tx.transaction.updateMany({
+    where: {
+      id: transactionId,
+      status: TransactionStatus.PENDING,
+    },
+    data: {
+      status: TransactionStatus.FAILED,
+      failureReason,
+    },
+  });
 }
 
 export async function markTransactionSuccessful(

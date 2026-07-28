@@ -57,3 +57,34 @@ export async function failIdempotencyTx(
     },
   });
 }
+
+export async function reclaimIdempotencyReservationTx(
+  tx: Prisma.TransactionClient,
+  key: string,
+  requestHash: string,
+  expiresAt: Date,
+) {
+  return tx.idempotencyKey.updateMany({
+    where: {
+      key,
+      requestHash,
+      OR: [
+        {
+          status: IdempotencyStatus.FAILED,
+        },
+        {
+          status: IdempotencyStatus.IN_PROGRESS,
+          expiresAt: {
+            lt: new Date(),
+          },
+        },
+      ],
+    },
+    data: {
+  status: IdempotencyStatus.IN_PROGRESS,
+  requestHash,
+  expiresAt,
+  responseBody: Prisma.JsonNull,
+},
+  });
+}
