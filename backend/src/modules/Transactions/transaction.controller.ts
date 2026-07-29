@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { Request, Response ,NextFunction} from "express";
 
 import {
   getTransactionById,
@@ -9,9 +9,11 @@ import {
 } from "./transaction.database.js";
 import { serializeBigInt } from "../../common/config/serialiseBigInt.js";
 import { TransactionStatus } from "@prisma/client";
-
+import { TransactionType } from "@prisma/client";
+import { LockingStrategy } from "@prisma/client";
+import { createPayment } from "../payments/payment.service.js";
 import { logger } from "../../common/config/logger.js";
-
+import { randomUUID } from "crypto";
 export const getTransactionByIdController = async (
   req: Request<{ transactionId: string }>,
   res: Response,
@@ -152,3 +154,52 @@ export const getTransactionEventsController = async (
     });
   }
 };
+
+// admin.controller.ts
+
+export async function reverseTransactionController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { transactionId } = req.body;
+
+    if (!transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: "transactionId is required",
+      });
+    }
+
+    // Replace this with however your auth middleware exposes the user.
+    const adminUserId = req.user.id;
+
+    const result = await createPayment(
+      adminUserId,
+      {
+        transactionType: TransactionType.REVERSAL,
+
+        transactionIdToReverse: transactionId,
+
+        // Required by your current CreatePaymentRequest.
+        // executeReversalTransaction() ignores them.
+        amount: 0n,
+        toAccountId: "",
+
+        idempotencyKey: randomUUID(),
+
+        lockingStrategy:
+          LockingStrategy.PESSIMISTIC,
+      },
+      {},
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}

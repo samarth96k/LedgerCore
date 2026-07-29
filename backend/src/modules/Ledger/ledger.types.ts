@@ -1,7 +1,8 @@
 import {
   EntryType,
   LockingStrategy,
-  AccountStatus
+  AccountStatus,
+  AccountType
 } from "@prisma/client";
 
 export interface JournalEntryInput {
@@ -43,4 +44,5 @@ export interface LockedAccount {
   cachedBalance: bigint;
   lastLedgerEntryId: string | null;
   updatedAt: Date;
+  accountType: AccountType;
 }

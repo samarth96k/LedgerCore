@@ -1,6 +1,6 @@
 import { prisma } from "../../PrismaClient/prismaclient.js";
 import { TransactionStatus } from "@prisma/client";
-import { TransactionEventType, Prisma } from "@prisma/client";
+import { TransactionEventType, Prisma, TransactionType  } from "@prisma/client";
 import type { CreateTransactionInput } from "./transaction.types.js";
 
 //read functions so they do not require transaction parameter from payment module
@@ -100,6 +100,7 @@ export async function createTransaction(
     idempotencyKey,
     status = TransactionStatus.PENDING,
     lockingStrategy,
+    reversalOfId,
   }: CreateTransactionInput,
 ) {
   return tx.transaction.create({
@@ -111,6 +112,7 @@ export async function createTransaction(
       idempotencyKey,
       status,
       lockingStrategy,
+        ...(reversalOfId && { reversalOfId }),
     },
   });
 }
@@ -187,4 +189,25 @@ export async function createTransactionEvent(
       ...(metadata !== undefined && { metadata }),
     },
   });
+}
+
+export async function getTransactionByIdTx(
+    tx: Prisma.TransactionClient,
+    transactionId: string,
+) {
+    return tx.transaction.findUnique({
+        where: { id: transactionId },
+    });
+}
+
+export async function getLedgerEntriesByTransactionIdTx(
+    tx: Prisma.TransactionClient,
+    transactionId: string,
+) {
+    return tx.ledgerEntry.findMany({
+        where: { transactionId },
+        orderBy: {
+            createdAt: "asc",
+        },
+    });
 }

@@ -79,7 +79,7 @@ export async function loadAndLockAccounts(
       a.status,
       a.currency,
       a.version,
-
+      a."type" AS "accountType",
       ab."cachedBalance" AS "cachedBalance",
       ab."lastLedgerEntryId" AS "lastLedgerEntryId",
       ab."updatedAt" AS "updatedAt"

@@ -12,6 +12,7 @@ import { TransactionStatus } from "@prisma/client";
 import { requireAdmin } from "../../common/middleware/auth.middleware.js";
 import { serializeBigInt } from "../../common/config/serialiseBigInt.js";
 import { createTransaction,createTransactionEvent } from "./transaction.database.js";
+import { reverseTransactionController } from "./transaction.controller.js";
 //END FOR POST TRANSACTION STUB
 
 export const transactionRouter = express.Router();
@@ -21,6 +22,7 @@ transactionRouter.get("/status/:status",requireAdmin,getTransactionsByStatusCont
 transactionRouter.get("/user/:userId",requireAdmin,getTransactionsByUserIdController,);   //TESTED
 transactionRouter.get("/:transactionId/events",requireAdmin,getTransactionEventsController,); //TESTED 
 transactionRouter.get("/:transactionId",requireAdmin,getTransactionByIdController,); //TESTED
+transactionRouter.post("/admin/reverse",requireAdmin, reverseTransactionController,);
 
 //----------------------------------------------------------------------------------------------------------------------------------------------------------------------
 

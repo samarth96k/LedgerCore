@@ -31,6 +31,8 @@ enum SystemAccountType {
   REFUND_ACCOUNT
   FEE_REVENUE
   SUSPENSE
+  DEPOSIT
+  WITHDRAWAL
 }
 
 enum AccountStatus {

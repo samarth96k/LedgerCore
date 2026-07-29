@@ -8,6 +8,8 @@ import {
   TransactionEventType,
   TransactionStatus,
   type Transaction,
+  TransactionType,
+  AccountType
 } from "@prisma/client";
 import { logger } from "../../common/config/logger.js";
 import { prisma } from "../../PrismaClient/prismaclient.js";
@@ -38,6 +40,8 @@ import type {
   PaymentReservation,
 } from "./payment.types.js";
 import { validatePaymentRequest } from "./payment.validation.js";
+import type { JournalEntryInput } from "../Ledger/ledger.types.js";
+
 
 export async function createPayment(
   authenticatedUserId: string,
@@ -131,21 +135,54 @@ async function executePayment(
   options: PaymentOptions,
 ) {
   return prisma.$transaction(async (tx) => {
-    const sender = await loadSenderAccount(tx, authenticatedUserId);
+    let journal: PostJournalRequest;
 
-    const recipient = await loadRecipientAccount(tx, request.toAccountId);
+    switch (request.transactionType) {
+      case TransactionType.TRANSFER:
+        journal = await executePaymentTransaction(
+          tx,
+          transaction,
+          authenticatedUserId,
+          request,
+          options,
+        );
+        break;
 
-    validateBusinessRules(sender, recipient);
+      case TransactionType.DEPOSIT:
+        journal = await executeDepositTransaction(
+          tx,
+          transaction,
+          authenticatedUserId,
+          request,
+          options,
+        );
+        break;
 
-    const journal = buildJournalEntries(
-      transaction.id,
-      sender.id,
-      recipient.id,
-      request,
-      options,
-    );
-console.log(journal);
-    const ledgerEntries = await postJournal(tx, journal);
+      case TransactionType.WITHDRAWAL:
+        journal = await executeWithdrawalTransaction(
+          tx,
+          authenticatedUserId,
+          transaction,
+          request,
+          options,
+        );
+        break;
+
+      case TransactionType.REVERSAL:
+        journal = await executeReversalTransaction(
+          tx,
+          transaction,
+          authenticatedUserId,
+          request,
+          options,
+        );
+        break;
+
+      default:
+        throw new Error("Unsupported transaction type.");
+    }
+
+    await postJournal(tx, journal);
 
     await markTransactionSuccessful(tx, transaction.id);
 
@@ -154,6 +191,7 @@ console.log(journal);
       transaction.id,
       TransactionEventType.PAYMENT_SUCCEEDED,
     );
+
     const response = {
       transactionId: transaction.id,
       status: TransactionStatus.SUCCESS,
@@ -349,6 +387,9 @@ async function createPendingTransaction(
     idempotencyKey: request.idempotencyKey,
     lockingStrategy: request.lockingStrategy,
     status: TransactionStatus.PENDING,
+    ...(request.transactionIdToReverse && {
+    reversalOfId: request.transactionIdToReverse,
+  }),
   });
 
   await createTransactionEvent(
@@ -433,61 +474,203 @@ async function handleDuplicateReservation(
   }
 }
 
-// export async function createPayment(
-//   authenticatedUserId: string,
-//   request: CreatePaymentRequest,
-//   options: PaymentOptions,
-// ) {
-//   validatePaymentRequest(request);
+async function executePaymentTransaction(
+  tx: Prisma.TransactionClient,
+  transaction: Transaction,
+  authenticatedUserId: string,
+  request: CreatePaymentRequest,
+  options: PaymentOptions,
+): Promise<PostJournalRequest> {
+  const sender = await loadSenderAccount(tx, authenticatedUserId);
 
-//   // Transaction A
-//   // TODO: Reserve Idempotency
+  const recipient = await loadRecipientAccount(
+    tx,
+    request.toAccountId,
+  );
 
-//   return prisma.$transaction(async (tx) => {
-//     const sender = await loadSenderAccount(tx, authenticatedUserId);
+  validateBusinessRules(sender, recipient);
 
-//     const recipient = await loadRecipientAccount(tx, request.toAccountId);
+  return buildJournalEntries(
+    transaction.id,
+    sender.id,
+    recipient.id,
+    request,
+    options,
+  );
+}
 
-//     validateBusinessRules(sender, recipient);
+async function executeDepositTransaction(
+  tx: Prisma.TransactionClient,
+  transaction: Transaction,
+  authenticatedUserId: string,
+  request: CreatePaymentRequest,
+  options: PaymentOptions,
+): Promise<PostJournalRequest> {
+  const recipient = await loadRecipientAccount(tx, request.toAccountId);
 
-//     const transaction = await createTransaction(tx, {
-//       type: request.transactionType,
-//       initiatorUserId: authenticatedUserId,
-//       amount: request.amount,
-//       idempotencyKey: request.idempotencyKey,
-//       lockingStrategy: request.lockingStrategy,
-//       status: TransactionStatus.PENDING,
-//     });
+  validateBusinessRules(
+    await getAccountByIdTx(tx,SYSTEM_ACCOUNTS[SystemAccountType.DEPOSIT]),
+    recipient,
+  );
 
-//     await createTransactionEvent(
-//       tx,
-//       transaction.id,
-//       TransactionEventType.PAYMENT_INITIATED,
-//     );
+  return buildJournalEntries(
+    transaction.id,
+    SYSTEM_ACCOUNTS[SystemAccountType.DEPOSIT],
+    recipient.id,
+    request,
+    options,
+  );
+}
 
-//     const journal = buildJournalEntries(
-//       transaction.id,
-//       sender.id,
-//       recipient.id,
-//       request,
-//       options,
-//     );
+async function executeWithdrawalTransaction(
+  tx: Prisma.TransactionClient,
+  authenticatedUserId: string,
+  transaction: Transaction,
+  request: CreatePaymentRequest,
+  options: PaymentOptions,
+): Promise<PostJournalRequest> {
+  const sender = await loadSenderAccount(tx, authenticatedUserId);
 
-//     const ledgerEntries = await postJournal(tx, journal);
+  validateBusinessRules(
+    sender,
+    await getAccountByIdTx(tx,SYSTEM_ACCOUNTS[SystemAccountType.WITHDRAWAL]),
+  );
 
-//     await markTransactionSuccessful(tx, transaction.id);
+  return buildJournalEntries(
+    transaction.id,
+    sender.id,
+    SYSTEM_ACCOUNTS[SystemAccountType.WITHDRAWAL],
+    request,
+    options,
+  );
+}
 
-//     await createTransactionEvent(
-//       tx,
-//       transaction.id,
-//       TransactionEventType.PAYMENT_SUCCEEDED,
-//     );
+async function executeReversalTransaction(
+  tx: Prisma.TransactionClient,
+  transaction: Transaction,
+  authenticatedUserId: string,
+  request: CreatePaymentRequest,
+  options: PaymentOptions,
+): Promise<PostJournalRequest> {
 
-//     // TODO:
-//     return {
-//       transactionId: transaction.id,
-//       status: TransactionStatus.SUCCESS,
-//     };
-//     // completeIdempotency()
-//   });
-// }
+  if (!request.transactionIdToReverse) {
+    throw new Error(
+      "transactionIdToReverse is required",
+    );
+  }
+
+  const originalTransaction = await tx.transaction.findUnique({
+    where: {
+      id: request.transactionIdToReverse,
+    },
+  });
+
+  if (!originalTransaction) {
+    throw new Error(
+      "Original transaction not found",
+    );
+  }
+
+  if (originalTransaction.type === TransactionType.REVERSAL) {
+    throw new Error(
+      "Cannot refund a refund transaction",
+    );
+  }
+
+  if (originalTransaction.status !== TransactionStatus.SUCCESS) {
+    throw new Error(
+      "Only successful transactions can be refunded",
+    );
+  }
+
+  const existingReversal = await tx.transaction.findFirst({
+    where: {
+      reversalOfId: originalTransaction.id,
+       status: TransactionStatus.SUCCESS,
+    },
+  });
+
+  if (existingReversal) {
+    throw new Error(
+      "Transaction has already been refunded",
+    );
+  }
+logger.debug(existingReversal);
+  const originalEntries = await tx.ledgerEntry.findMany({
+    where: {
+      transactionId: originalTransaction.id,
+    },
+    include: {
+      account: true,
+    },
+    orderBy: {
+      createdAt: "asc",
+    },
+  });
+logger.debug(originalEntries);
+  if (originalEntries.length === 0) {
+    throw new Error(
+      "No ledger entries found for transaction",
+    );
+  }
+
+  // Ignore all SYSTEM account entries.
+  const userEntries = originalEntries.filter(
+    (entry) => entry.account.type === AccountType.USER_WALLET,
+  );
+  logger.debug(userEntries)
+  if (userEntries.length < 2) {
+    throw new Error(
+      "No refundable user ledger entries found",
+    );
+  }
+
+  // There should be exactly one payer.
+  const payerEntry = userEntries.find(
+    (entry) => entry.direction === EntryType.DEBIT,
+  );
+
+  if (!payerEntry) {
+    throw new Error(
+      "Original transaction does not contain a payer entry",
+    );
+  }
+
+  const recipientEntries = userEntries.filter(
+    (entry) => entry.direction === EntryType.CREDIT,
+  );
+
+  if (recipientEntries.length === 0) {
+    throw new Error(
+      "Original transaction does not contain any recipient entries",
+    );
+  }
+
+  const entries: JournalEntryInput[] = [];
+
+  let totalRefundAmount = 0n;
+
+  // Debit every recipient by the amount they originally received.
+  for (const recipient of recipientEntries) {
+    entries.push({
+      accountId: recipient.accountId,
+      amount: recipient.amount,
+      entryType: EntryType.DEBIT,
+    });
+
+    totalRefundAmount += recipient.amount;
+  }
+
+  // Credit the original payer with the total refunded amount.
+  entries.push({
+    accountId: payerEntry.accountId,
+    amount: totalRefundAmount,
+    entryType: EntryType.CREDIT,
+  });
+
+  return {
+    transactionId: transaction.id,
+    lockingStrategy: request.lockingStrategy,
+    entries,
+  };
+}

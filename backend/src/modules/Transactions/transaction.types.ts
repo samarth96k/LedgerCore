@@ -12,4 +12,5 @@ export interface CreateTransactionInput {
   idempotencyKey: string;
   status?: TransactionStatus;
   lockingStrategy: LockingStrategy;
+  reversalOfId?: string;
 }

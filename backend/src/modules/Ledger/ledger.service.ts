@@ -19,6 +19,7 @@ import type {
   PreparedJournal,
   LockedAccount,
 } from "./ledger.types.js";
+import { AccountType } from "@prisma/client";
 
 function validateJournal(request: PostJournalRequest): void {
   if (request.entries.length === 0) {
@@ -39,7 +40,6 @@ function validateJournal(request: PostJournalRequest): void {
     if (entry.amount <= 0n) {
       throw new Error("Ledger amounts must be greater than zero.");
     }
-    
 
     if (entry.entryType === EntryType.DEBIT) {
       totalDebit += entry.amount;
@@ -117,7 +117,10 @@ function validateBalances(
       throw new Error(`Account ${entry.accountId} not found.`);
     }
 
-    if (account.cachedBalance < entry.amount) {
+    if (
+      account.accountType === AccountType.USER_WALLET &&
+      account.cachedBalance < entry.amount
+    ) {
       throw new Error(`Insufficient balance in account ${entry.accountId}.`);
     }
   }
@@ -175,24 +178,22 @@ export async function postJournal(
   request: PostJournalRequest,
 ) {
   validateJournal(request);
-
+console.log(
+  "Account IDs:",
+  request.entries.map(e => e.accountId),
+);
   const lockedAccounts = await loadLockedAccounts(tx, request);
 
   validateBalances(lockedAccounts, request);
 
-  const preparedJournal = prepareLedgerEntries(
-    request,
-    lockedAccounts,
-  );
+  const preparedJournal = prepareLedgerEntries(request, lockedAccounts);
 
   const createdEntries = await createLedgerEntries(
     tx,
     preparedJournal.ledgerEntries,
   );
 
-  const updatedBalances = [
-    ...preparedJournal.updatedBalances.values(),
-  ];
+  const updatedBalances = [...preparedJournal.updatedBalances.values()];
 
   /*
     Associate each account with the LAST ledger entry
@@ -205,9 +206,7 @@ export async function postJournal(
   }
 
   for (const balance of updatedBalances) {
-    const ledgerEntryId = latestEntryMap.get(
-      balance.accountId,
-    );
+    const ledgerEntryId = latestEntryMap.get(balance.accountId);
 
     if (ledgerEntryId === undefined) {
       throw new Error(
@@ -218,36 +217,19 @@ export async function postJournal(
     balance.lastLedgerEntryId = ledgerEntryId;
   }
 
-  await updateAccountBalances(
-    tx,
-    updatedBalances,
-  );
+  await updateAccountBalances(tx, updatedBalances);
 
   return createdEntries;
 }
 
-
-
-
-
-export async function getLedgerEntriesByTransaction(
-  transactionId: string,
-) {
-  return getLedgerEntriesByTransactionId(
-    transactionId,
-  );
+export async function getLedgerEntriesByTransaction(transactionId: string) {
+  return getLedgerEntriesByTransactionId(transactionId);
 }
 
-export async function getLedgerEntriesByAccount(
-  accountId: string,
-) {
-  return getLedgerEntriesByAccountId(
-    accountId,
-  );
+export async function getLedgerEntriesByAccount(accountId: string) {
+  return getLedgerEntriesByAccountId(accountId);
 }
 
-export async function getLatestAccountLedgerEntry(
-  accountId: string,
-) {
+export async function getLatestAccountLedgerEntry(accountId: string) {
   return getLatestLedgerEntry(accountId);
 }

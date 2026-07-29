@@ -13,6 +13,8 @@ export interface CreatePaymentRequest {
   lockingStrategy: LockingStrategy;
 
   transactionType: TransactionType;
+
+  transactionIdToReverse?: string;
 }
 
 export interface PaymentOptions {

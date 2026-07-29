@@ -9,6 +9,8 @@ export const SYSTEM_ACCOUNTS: Record<SystemAccountType, string> = {
   FEE_REVENUE: process.env.FEE_REVENUE_ACCOUNT_ID!,
   SUSPENSE: process.env.SUSPENSE_ACCOUNT_ID!,
   FOREIGN_SETTLEMENT: process.env.FOREIGN_SETTLEMENT_ACCOUNT_ID!,
+  DEPOSIT:process.env.DEPOSIT!,
+  WITHDRAWAL:process.env.WITHDRAWAL!
 };
 
 //create accounts and connet them to user manually
