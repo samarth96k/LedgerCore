@@ -8,7 +8,7 @@ import type { Request, Response } from "express";
 
 const createToken = (id: string, accountId: string,role:string) => {
   return jwt.sign({ id, accountId ,role}, process.env.JWT_SECRET!, {
-    expiresIn: "15m",
+    expiresIn: "25m",
   });
 };
 

@@ -9,7 +9,7 @@ import {
   TransactionStatus,
   type Transaction,
   TransactionType,
-  AccountType
+  AccountType,
 } from "@prisma/client";
 import { logger } from "../../common/config/logger.js";
 import { prisma } from "../../PrismaClient/prismaclient.js";
@@ -41,7 +41,6 @@ import type {
 } from "./payment.types.js";
 import { validatePaymentRequest } from "./payment.validation.js";
 import type { JournalEntryInput } from "../Ledger/ledger.types.js";
-
 
 export async function createPayment(
   authenticatedUserId: string,
@@ -86,9 +85,7 @@ async function reservePayment(
 ): Promise<PaymentReservation> {
   const requestHash = generateRequestHash(request);
 
-  const expiresAt = new Date(
-    Date.now() + 15 * 60 * 1000,
-  );
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -99,11 +96,7 @@ async function reservePayment(
         expiresAt,
       );
 
-      return createPendingTransaction(
-        tx,
-        authenticatedUserId,
-        request,
-      );
+      return createPendingTransaction(tx, authenticatedUserId, request);
     });
   } catch (error) {
     if (
@@ -134,81 +127,83 @@ async function executePayment(
   request: CreatePaymentRequest,
   options: PaymentOptions,
 ) {
-  return prisma.$transaction(async (tx) => {
-    let journal: PostJournalRequest;
+  return prisma.$transaction(
+    async (tx) => {
+      let journal: PostJournalRequest;
 
-    switch (request.transactionType) {
-      case TransactionType.TRANSFER:
-        journal = await executePaymentTransaction(
-          tx,
-          transaction,
-          authenticatedUserId,
-          request,
-          options,
-        );
-        break;
+      switch (request.transactionType) {
+        case TransactionType.TRANSFER:
+          journal = await executePaymentTransaction(
+            tx,
+            transaction,
+            authenticatedUserId,
+            request,
+            options,
+          );
+          break;
 
-      case TransactionType.DEPOSIT:
-        journal = await executeDepositTransaction(
-          tx,
-          transaction,
-          authenticatedUserId,
-          request,
-          options,
-        );
-        break;
+        case TransactionType.DEPOSIT:
+          journal = await executeDepositTransaction(
+            tx,
+            transaction,
+            authenticatedUserId,
+            request,
+            options,
+          );
+          break;
 
-      case TransactionType.WITHDRAWAL:
-        journal = await executeWithdrawalTransaction(
-          tx,
-          authenticatedUserId,
-          transaction,
-          request,
-          options,
-        );
-        break;
+        case TransactionType.WITHDRAWAL:
+          journal = await executeWithdrawalTransaction(
+            tx,
+            authenticatedUserId,
+            transaction,
+            request,
+            options,
+          );
+          break;
 
-      case TransactionType.REVERSAL:
-        journal = await executeReversalTransaction(
-          tx,
-          transaction,
-          authenticatedUserId,
-          request,
-          options,
-        );
-        break;
+        case TransactionType.REVERSAL:
+          journal = await executeReversalTransaction(
+            tx,
+            transaction,
+            authenticatedUserId,
+            request,
+            options,
+          );
+          break;
 
-      default:
-        throw new Error("Unsupported transaction type.");
+        default:
+          throw new Error("Unsupported transaction type.");
+      }
+
+      await postJournal(tx, journal);
+
+      await markTransactionSuccessful(tx, transaction.id);
+
+      await createTransactionEvent(
+        tx,
+        transaction.id,
+        TransactionEventType.PAYMENT_SUCCEEDED,
+      );
+
+      const response = {
+        transactionId: transaction.id,
+        status: TransactionStatus.SUCCESS,
+      };
+
+      const completed = await completeIdempotencyTx(
+        tx,
+        request.idempotencyKey,
+        response,
+      );
+
+      if (completed.count === 0) {
+        throw new Error("Failed to finalize idempotency record.");
+      }
+
+      return response;
     }
-
-    await postJournal(tx, journal);
-
-    await markTransactionSuccessful(tx, transaction.id);
-
-    await createTransactionEvent(
-      tx,
-      transaction.id,
-      TransactionEventType.PAYMENT_SUCCEEDED,
-    );
-
-    const response = {
-      transactionId: transaction.id,
-      status: TransactionStatus.SUCCESS,
-    };
-
-    const completed = await completeIdempotencyTx(
-      tx,
-      request.idempotencyKey,
-      response,
-    );
-
-    if (completed.count === 0) {
-      throw new Error("Failed to finalize idempotency record.");
-    }
-
-    return response;
-  });
+  );
 }
 
 //create payment TRANSACTION C - FAILURE MODE
@@ -240,7 +235,7 @@ async function failPayment(transaction: Transaction, error: unknown) {
     );
 
     if (failedIdempotency.count === 0) {
-      return ;
+      return;
     }
   });
 }
@@ -333,24 +328,19 @@ function buildJournalEntries(
   // Sender pays:
   // amount + platform fee + tax
   const senderDebit = request.amount + platformFee + tax;
-console.log({
-  requestAmount: request.amount,
-  senderDebit,
-  requestAmountType: typeof request.amount,
-  senderDebitType: typeof senderDebit,
-  platformFeeType: typeof platformFee,
-  taxType: typeof tax,
-});
+  console.log({
+    requestAmount: request.amount,
+    senderDebit,
+    requestAmountType: typeof request.amount,
+    senderDebitType: typeof senderDebit,
+    platformFeeType: typeof platformFee,
+    taxType: typeof tax,
+  });
   addEntry(entries, senderAccountId, EntryType.DEBIT, senderDebit);
 
   addEntry(entries, recipientAccountId, EntryType.CREDIT, request.amount);
 
-  addEntry(
-    entries,
-    SystemAccountType.FEE_REVENUE,
-    EntryType.CREDIT,
-    platformFee,
-  );
+  addEntry(entries, SYSTEM_ACCOUNTS.FEE_REVENUE, EntryType.CREDIT, platformFee);
 
   addEntry(entries, SYSTEM_ACCOUNTS.TREASURY, EntryType.CREDIT, tax);
 
@@ -388,8 +378,8 @@ async function createPendingTransaction(
     lockingStrategy: request.lockingStrategy,
     status: TransactionStatus.PENDING,
     ...(request.transactionIdToReverse && {
-    reversalOfId: request.transactionIdToReverse,
-  }),
+      reversalOfId: request.transactionIdToReverse,
+    }),
   });
 
   await createTransactionEvent(
@@ -483,10 +473,7 @@ async function executePaymentTransaction(
 ): Promise<PostJournalRequest> {
   const sender = await loadSenderAccount(tx, authenticatedUserId);
 
-  const recipient = await loadRecipientAccount(
-    tx,
-    request.toAccountId,
-  );
+  const recipient = await loadRecipientAccount(tx, request.toAccountId);
 
   validateBusinessRules(sender, recipient);
 
@@ -509,7 +496,7 @@ async function executeDepositTransaction(
   const recipient = await loadRecipientAccount(tx, request.toAccountId);
 
   validateBusinessRules(
-    await getAccountByIdTx(tx,SYSTEM_ACCOUNTS[SystemAccountType.DEPOSIT]),
+    await getAccountByIdTx(tx, SYSTEM_ACCOUNTS[SystemAccountType.DEPOSIT]),
     recipient,
   );
 
@@ -533,7 +520,7 @@ async function executeWithdrawalTransaction(
 
   validateBusinessRules(
     sender,
-    await getAccountByIdTx(tx,SYSTEM_ACCOUNTS[SystemAccountType.WITHDRAWAL]),
+    await getAccountByIdTx(tx, SYSTEM_ACCOUNTS[SystemAccountType.WITHDRAWAL]),
   );
 
   return buildJournalEntries(
@@ -552,50 +539,45 @@ async function executeReversalTransaction(
   request: CreatePaymentRequest,
   options: PaymentOptions,
 ): Promise<PostJournalRequest> {
-
   if (!request.transactionIdToReverse) {
-    throw new Error(
-      "transactionIdToReverse is required",
-    );
+    throw new Error("transactionIdToReverse is required");
   }
 
-  const originalTransaction = await tx.transaction.findUnique({
-    where: {
-      id: request.transactionIdToReverse,
-    },
-  });
+  const originalTransactions = await tx.$queryRaw<Transaction[]>`
+  SELECT *
+  FROM transactions
+  WHERE id = ${request.transactionIdToReverse}::uuid
+  FOR UPDATE
+`;
+
+  const originalTransaction = originalTransactions[0];
 
   if (!originalTransaction) {
-    throw new Error(
-      "Original transaction not found",
-    );
+    throw new Error("Original transaction not found");
+  }
+
+  if (!originalTransaction) {
+    throw new Error("Original transaction not found");
   }
 
   if (originalTransaction.type === TransactionType.REVERSAL) {
-    throw new Error(
-      "Cannot refund a refund transaction",
-    );
+    throw new Error("Cannot refund a refund transaction");
   }
 
   if (originalTransaction.status !== TransactionStatus.SUCCESS) {
-    throw new Error(
-      "Only successful transactions can be refunded",
-    );
+    throw new Error("Only successful transactions can be refunded");
   }
 
   const existingReversal = await tx.transaction.findFirst({
     where: {
       reversalOfId: originalTransaction.id,
-       status: TransactionStatus.SUCCESS,
+      status: TransactionStatus.SUCCESS,
     },
   });
 
   if (existingReversal) {
-    throw new Error(
-      "Transaction has already been refunded",
-    );
+    throw new Error("Transaction has already been refunded");
   }
-logger.debug(existingReversal);
   const originalEntries = await tx.ledgerEntry.findMany({
     where: {
       transactionId: originalTransaction.id,
@@ -607,22 +589,16 @@ logger.debug(existingReversal);
       createdAt: "asc",
     },
   });
-logger.debug(originalEntries);
   if (originalEntries.length === 0) {
-    throw new Error(
-      "No ledger entries found for transaction",
-    );
+    throw new Error("No ledger entries found for transaction");
   }
 
   // Ignore all SYSTEM account entries.
   const userEntries = originalEntries.filter(
     (entry) => entry.account.type === AccountType.USER_WALLET,
   );
-  logger.debug(userEntries)
   if (userEntries.length < 2) {
-    throw new Error(
-      "No refundable user ledger entries found",
-    );
+    throw new Error("No refundable user ledger entries found");
   }
 
   // There should be exactly one payer.
@@ -631,9 +607,7 @@ logger.debug(originalEntries);
   );
 
   if (!payerEntry) {
-    throw new Error(
-      "Original transaction does not contain a payer entry",
-    );
+    throw new Error("Original transaction does not contain a payer entry");
   }
 
   const recipientEntries = userEntries.filter(
@@ -661,11 +635,26 @@ logger.debug(originalEntries);
     totalRefundAmount += recipient.amount;
   }
 
+  if (totalRefundAmount !== originalTransaction.amount) {
+    throw new Error(
+      "Refund amount does not match original transaction amount.",
+    );
+  }
+
   // Credit the original payer with the total refunded amount.
   entries.push({
     accountId: payerEntry.accountId,
     amount: totalRefundAmount,
     entryType: EntryType.CREDIT,
+  });
+
+  await tx.transaction.update({
+    where: {
+      id: transaction.id,
+    },
+    data: {
+      amount: totalRefundAmount,
+    },
   });
 
   return {
