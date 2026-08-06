@@ -8,12 +8,14 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --watch src --ext ts --exec tsx src/server.ts",
-    "server": "tsx src/server.ts"
+    "server": "tsx src/server.ts",
+    "jobs:worker": "tsx src/jobs/reconciliation.worker.ts",
+    "jobs:scheduler": "tsx src/jobs/reconciliation.scheduler.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "bcrypt": "^6.0.0",
-    "bullmq": "^5.80.9",
+    "bullmq": "^5.81.3",
     "express": "^5.2.1",
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",

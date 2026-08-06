@@ -119,8 +119,8 @@ model Account {
   userId String? @db.Uuid
   user   User?   @relation(fields: [userId], references: [id])
 
-  type AccountType
-  aadhaarNumber String? @unique
+  type          AccountType
+  aadhaarNumber String?     @unique
 
   systemType SystemAccountType?
 
@@ -145,19 +145,19 @@ model Account {
 model Transaction {
   id String @id @default(uuid()) @db.Uuid
 
-  type TransactionType
+  type   TransactionType
   status TransactionStatus
 
   initiatorUserId String @db.Uuid
-  initiator User @relation(fields: [initiatorUserId], references: [id])
+  initiator       User   @relation(fields: [initiatorUserId], references: [id])
 
   amount BigInt
 
   currency String @default("INR")
 
-  idempotencyKey String @unique
+  idempotencyKey  String          @unique
   lockingStrategy LockingStrategy
-  reversalOfId String? @db.Uuid
+  reversalOfId    String?         @db.Uuid
 
   failureReason String?
 
@@ -165,8 +165,8 @@ model Transaction {
   updatedAt DateTime @updatedAt
 
   ledgerEntries LedgerEntry[]
-  events TransactionEvent[]
-
+  events        TransactionEvent[]
+@@index([updatedAt, status], map: "idx_transactions_updated_status")
   @@map("transactions")
 }
 
@@ -185,12 +185,13 @@ model LedgerEntry {
 
   direction EntryType
 
-amount BigInt
+  amount BigInt
 
-balanceAfter BigInt
+  balanceAfter BigInt
 
   createdAt DateTime @default(now())
 
+  @@index([createdAt, accountId], map: "idx_ledger_entries_created_account")
   @@map("ledger_entries")
 }
 
@@ -238,21 +239,56 @@ model IdempotencyKey {
 // =======================
 
 model ReconciliationRun {
-  id String @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid())
+
+  jobType ReconciliationJobType
+
+  status ReconciliationRunStatus
 
   startedAt DateTime
 
   completedAt DateTime?
 
-  accountsChecked Int
+  durationMs Int?
 
-  driftFound Boolean
+  itemsScanned Int @default(0)
 
-  driftDetails Json?
+  anomaliesFound Int @default(0)
 
-  dryRun Boolean
+  details Json?
 
+  errorMessage String?
+
+  dryRun Boolean @default(false)
+
+  @@index([jobType, startedAt(sort: Desc)])
+  @@index([status])
+  @@index([completedAt])
   @@map("reconciliation_runs")
+}
+
+enum ReconciliationJobType {
+  UNKNOWN
+
+  PENDING_SWEEPER
+
+  LEDGER_CONSISTENCY
+
+  ORPHAN_DETECTOR
+
+  IDEMPOTENCY_CLEANUP
+
+  ACCOUNT_SANITY
+}
+
+enum ReconciliationRunStatus {
+  RUNNING
+
+  SUCCESS
+
+  FAILED
+
+  PARTIAL_SUCCESS
 }
 
 // =======================
@@ -284,7 +320,7 @@ model AccountBalance {
 
   account Account @relation(fields: [accountId], references: [id])
 
-  cachedBalance BigInt @default(0)
+  cachedBalance     BigInt  @default(0)
   lastLedgerEntryId String? @db.Uuid
 
   updatedAt DateTime @updatedAt
